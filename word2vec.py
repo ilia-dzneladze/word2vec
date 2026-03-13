@@ -200,3 +200,54 @@ def train(corpus,
         print(f"  Epoch {epoch + 1} completed in {epoch_time:.1f}s")
  
     return U, V
+
+
+### Stage 8: Evaulation techniques (Cosine Wimilarity and Analogy)
+
+def most_similar(word, U, word_to_idx, idx_to_word, top_n=10):
+    if word not in word_to_idx:
+        print(f"'{word}' not in vocabulary")
+        return
+ 
+    idx = word_to_idx[word]
+    word_vec = U[idx]
+ 
+    # Cosine similarity against all words:
+    # cos(a, b) = (a^T b) / (||a|| ||b||)
+    # Compute all dot products at once: U @ word_vec gives (vocab_size,) vector
+    dots = U @ word_vec                        # a^T b for all words
+    norms = np.linalg.norm(U, axis=1)          # ||a|| for all words
+    word_norm = np.linalg.norm(word_vec)        # ||b||
+ 
+    similarities = dots / (norms * word_norm + 1e-10)
+ 
+    # Get top indices (excluding the word itself)
+    top_indices = np.argsort(similarities)[::-1][1:top_n + 1]
+ 
+    print(f"\nMost similar to '{word}':")
+    for i in top_indices:
+        print(f"  {idx_to_word[i]:15s} {similarities[i]:.4f}")
+
+def analogy(a, b, c, U, word_to_idx, idx_to_word, top_n=5):
+    for word in [a, b, c]:
+        if word not in word_to_idx:
+            print(f"'{word}' not in vocabulary")
+            return
+ 
+    vec = U[word_to_idx[b]] - U[word_to_idx[a]] + U[word_to_idx[c]]
+ 
+    # Cosine similarity of result vector against all words
+    dots = U @ vec
+    norms = np.linalg.norm(U, axis=1)
+    vec_norm = np.linalg.norm(vec)
+    similarities = dots / (norms * vec_norm + 1e-10)
+ 
+    # Exclude input words
+    exclude = {word_to_idx[a], word_to_idx[b], word_to_idx[c]}
+    top_indices = np.argsort(similarities)[::-1]
+    results = [i for i in top_indices if i not in exclude][:top_n]
+ 
+    print(f"\n'{a}' is to '{b}' as '{c}' is to ...?")
+    for i in results:
+        print(f"  {idx_to_word[i]:15s} {similarities[i]:.4f}")
+
