@@ -129,3 +129,73 @@ def train_pair(w_c, w_o, neg_indices, U, V, lr):
     V[neg_indices] -= lr * grad_v_negs
 
     return loss
+
+import time
+
+### Stage 7: Training Loop
+def train(corpus, 
+          vocab_size, 
+          noise_dist, 
+          embedding_dim=100, 
+          window=5,
+          num_neg=5, 
+          initial_lr=0.025, 
+          min_lr=0.0001, 
+          epochs=1):
+    
+    lr = 0
+    U, V = initialize_embeddings(vocab_size, embedding_dim)
+    total_words = len(corpus) * epochs
+    words_processed = 0
+    running_loss = 0.0
+    log_every = 100000
+ 
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch + 1}/{epochs}")
+        epoch_start = time.time()
+ 
+        for t in range(len(corpus)):
+            w_c = corpus[t]
+ 
+            # Random window size from 1 to window (like original word2vec)
+            # Effectively gives closer words more weight
+            actual_window = np.random.randint(1, window + 1)
+ 
+            for j in range(-actual_window, actual_window + 1):
+                # Skip center position
+                if j == 0:
+                    continue
+                # Skip out-of-bounds
+                if t + j < 0 or t + j >= len(corpus):
+                    continue
+ 
+                w_o = corpus[t + j]
+ 
+                # Sample negative words from noise distribution
+                neg_indices = np.random.choice(
+                    vocab_size, size=num_neg, replace=False, p=noise_dist
+                )
+ 
+                # Linear learning rate decay
+                lr = initial_lr - (initial_lr - min_lr) * (words_processed / total_words)
+ 
+                # One training step
+                loss = train_pair(w_c, w_o, neg_indices, U, V, lr)
+                running_loss += loss
+                words_processed += 1
+ 
+            # Logging
+            if (t + 1) % log_every == 0:
+                avg_loss = running_loss / log_every
+                elapsed = time.time() - epoch_start
+                wps = (t + 1) / elapsed
+                print(f"  [{t+1:>10}/{len(corpus)}] "
+                      f"loss: {avg_loss:.4f}  "
+                      f"lr: {lr:.6f}  "
+                      f"words/sec: {wps:.0f}")
+                running_loss = 0.0
+ 
+        epoch_time = time.time() - epoch_start
+        print(f"  Epoch {epoch + 1} completed in {epoch_time:.1f}s")
+ 
+    return U, V
