@@ -64,3 +64,16 @@ def subsample_corpus(corpus, word_counts, t=1e-5):
     # Keep word if random value < keep probability
     mask = np.array([rand_vals[i] < keep_probs[corpus[i]] for i in range(len(corpus))])
     return corpus[mask]
+
+
+### Stage 3: Negative Sampling Distribution (For Skip-Gram)
+
+def build_noise_distribuiton(word_counts, vocab_size):
+    freqs = np.zeros(vocab_size)
+    for idx, count in word_counts.items():
+        freqs[idx] = count
+
+    noise_dist = freqs ** 0.75
+    noise_dist = noise_dist / noise_dist.sum()
+    return noise_dist
+
