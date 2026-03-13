@@ -28,25 +28,39 @@ def load_text8(data_dir="data"):
 import numpy as np
 from collections import Counter
 
-words = load_text8()
+def build_vocab(words, min_count = 5):
 
-min_count = 5
-word_counts = Counter(words)
+    word_counts = Counter(words)
 
-# Build vocabulary only from frequent words
-word_to_idx = {}
-idx_to_word = {}
-idx = 0
-for word, count in word_counts.items():
-    if count >= min_count:
-        word_to_idx[word] = idx
-        idx_to_word[idx] = word
-        idx += 1
+    # Build vocabulary only from frequent words
+    word_to_idx = {}
+    idx_to_word = {}
+    idx = 0
+    for word, count in word_counts.items():
+        if count >= min_count:
+            word_to_idx[word] = idx
+            idx_to_word[idx] = word
+            idx += 1
 
-corpus = [word_to_idx[w] for w in words if w in word_to_idx]
-corpus = np.array(corpus, dtype=np.int32)
+    return word_to_idx, idx_to_word, word_counts
 
-print(f"Vocabulary size: {len(word_to_idx)}")
-print(f"Corpus length: {len(corpus)}")
+def build_corpus(words, word_to_idx):
+    corpus = [word_to_idx[w] for w in words if w in word_to_idx]
+    return np.array(corpus, dtype=np.int32)
 
-### Stage 2: Initialize Embeddings
+
+### Stage 2: Subsample Vocabulary (According to Mikolov)
+
+def subsample_corpus(corpus, word_counts, t=1e-5):
+    total_words = sum(word_counts.values())
+    freqs = {idx: count / total_words for idx, count in word_counts.items()}
+
+    # P_keep(w) = sqrt(t / f(w))  (clamped to max 1.0)
+    keep_probs = {idx: min(1.0, np.sqrt(t / freqs[idx])) for idx in freqs}
+ 
+    # Generate uniform random numbers for the entire corpus at once
+    rand_vals = np.random.random(len(corpus))
+ 
+    # Keep word if random value < keep probability
+    mask = np.array([rand_vals[i] < keep_probs[corpus[i]] for i in range(len(corpus))])
+    return corpus[mask]
