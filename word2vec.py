@@ -77,3 +77,9 @@ def build_noise_distribuiton(word_counts, vocab_size):
     noise_dist = noise_dist / noise_dist.sum()
     return noise_dist
 
+### Stage 4: Initialize Embedding Vectors With Small Random Values
+
+def initialize_embeddings(vocab_size, embedding_dim):
+    U = np.random.randn(vocab_size, embedding_dim) * 0.01
+    V = np.random.randn(vocab_size, embedding_dim) * 0.01
+    return U, V
