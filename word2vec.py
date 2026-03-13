@@ -51,27 +51,27 @@ def build_corpus(words, word_to_idx):
 
 ### Stage 2: Subsample Vocabulary (According to Mikolov)
 
-def subsample_corpus(corpus, word_counts, t=1e-5):
+def subsample_corpus(corpus, word_counts, word_to_idx, vocab_size, t=1e-5):
     total_words = sum(word_counts.values())
-    freqs = {idx: count / total_words for idx, count in word_counts.items()}
 
-    # P_keep(w) = sqrt(t / f(w))  (clamped to max 1.0)
-    keep_probs = {idx: min(1.0, np.sqrt(t / freqs[idx])) for idx in freqs}
- 
-    # Generate uniform random numbers for the entire corpus at once
+    keep_probs = np.ones(vocab_size)
+    for word, count in word_counts.items():
+        if word in word_to_idx:
+            freq = count / total_words
+            keep_probs[word_to_idx[word]] = min(1.0, np.sqrt(t / freq))
+
     rand_vals = np.random.random(len(corpus))
- 
-    # Keep word if random value < keep probability
-    mask = np.array([rand_vals[i] < keep_probs[corpus[i]] for i in range(len(corpus))])
+    mask = rand_vals < keep_probs[corpus]
     return corpus[mask]
 
 
 ### Stage 3: Negative Sampling Distribution (For Skip-Gram)
 
-def build_noise_distribuiton(word_counts, vocab_size):
+def build_noise_distribution(word_counts, word_to_idx, vocab_size):
     freqs = np.zeros(vocab_size)
-    for idx, count in word_counts.items():
-        freqs[idx] = count
+    for word, count in word_counts.items():
+        if word in word_to_idx:
+            freqs[word_to_idx[word]] = count
 
     noise_dist = freqs ** 0.75
     noise_dist = noise_dist / noise_dist.sum()
@@ -130,75 +130,126 @@ def train_pair(w_c, w_o, neg_indices, U, V, lr):
 
     return loss
 
-import time
+def generate_pairs(corpus, start, end, window):
+    centers = []
+    contexts = []
+    corpus_len = len(corpus)
+
+    for t in range(start, min(end, corpus_len)):
+        w_c = corpus[t]
+        actual_window = np.random.randint(1, window + 1)
+
+        j_start = max(0, t - actual_window)
+        j_end = min(corpus_len, t + actual_window + 1)
+
+        for j in range(j_start, j_end):
+            if j == t:
+                continue
+            centers.append(w_c)
+            contexts.append(corpus[j])
+
+    return np.array(centers, dtype=np.int32), np.array(contexts, dtype=np.int32)
+
+def train_batch(center_ids, context_ids, neg_ids, U, V, lr):
+    B = len(center_ids)
+
+    # Forward pass
+    u_centers = U[center_ids]
+    v_contexts = V[context_ids]
+    v_negs = V[neg_ids]
+
+    pos_dots = np.sum(u_centers * v_contexts, axis=1)
+    neg_dots = np.sum(u_centers[:, np.newaxis, :] * v_negs, axis=2)
+
+    pos_scores = sigmoid(pos_dots)
+    neg_scores = sigmoid(neg_dots)
+
+    # Loss
+    loss = -np.sum(np.log(pos_scores + 1e-10)) \
+           - np.sum(np.log(1 - neg_scores + 1e-10))
+
+    # Gradients (same formulas, just batched)
+    old_u_centers = u_centers.copy()
+    pos_coeffs = (pos_scores - 1).reshape(-1, 1)
+    neg_coeffs = neg_scores[:, :, np.newaxis]
+
+    grad_v_pos = pos_coeffs * old_u_centers
+    grad_v_negs = neg_coeffs * old_u_centers[:, np.newaxis, :]
+    grad_u = pos_coeffs * v_contexts + np.sum(neg_coeffs * v_negs, axis=1)
+
+    # Updates
+    np.add.at(U, center_ids, -lr * grad_u)
+    np.add.at(V, context_ids, -lr * grad_v_pos)
+
+    neg_flat = neg_ids.reshape(-1)
+    grad_v_negs_flat = grad_v_negs.reshape(-1, grad_v_negs.shape[2])
+    np.add.at(V, neg_flat, -lr * grad_v_negs_flat)
+
+    return loss
 
 ### Stage 7: Training Loop
 
-def train(corpus, 
-          vocab_size, 
-          noise_dist, 
-          embedding_dim=100, 
-          window=5,
-          num_neg=5, 
-          initial_lr=0.025, 
-          min_lr=0.0001, 
-          epochs=1):
-    
+import time
+
+def train(corpus, vocab_size, noise_dist, embedding_dim=100, window=5,
+          num_neg=5, initial_lr=0.025, min_lr=0.0001, epochs=1,
+          batch_size=512, chunk_size=100000):
+
     lr = 0
     U, V = initialize_embeddings(vocab_size, embedding_dim)
     total_words = len(corpus) * epochs
     words_processed = 0
     running_loss = 0.0
-    log_every = 100000
- 
+    running_pairs = 0
+
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}/{epochs}")
         epoch_start = time.time()
- 
-        for t in range(len(corpus)):
-            w_c = corpus[t]
- 
-            # Random window size from 1 to window (like original word2vec)
-            # Effectively gives closer words more weight
-            actual_window = np.random.randint(1, window + 1)
- 
-            for j in range(-actual_window, actual_window + 1):
-                # Skip center position
-                if j == 0:
-                    continue
-                # Skip out-of-bounds
-                if t + j < 0 or t + j >= len(corpus):
-                    continue
- 
-                w_o = corpus[t + j]
- 
-                # Sample negative words from noise distribution
-                neg_indices = np.random.choice(
-                    vocab_size, size=num_neg, replace=False, p=noise_dist
-                )
- 
-                # Linear learning rate decay
+
+        for chunk_start in range(0, len(corpus), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(corpus))
+
+            centers, contexts = generate_pairs(corpus, chunk_start, chunk_end, window)
+            if len(centers) == 0:
+                continue
+
+            all_negs = np.random.choice(
+                vocab_size, size=(len(centers), num_neg), replace=True, p=noise_dist
+            )
+
+            shuffle_idx = np.random.permutation(len(centers))
+            centers = centers[shuffle_idx]
+            contexts = contexts[shuffle_idx]
+            all_negs = all_negs[shuffle_idx]
+
+            for b_start in range(0, len(centers), batch_size):
+                b_end = min(b_start + batch_size, len(centers))
                 lr = initial_lr - (initial_lr - min_lr) * (words_processed / total_words)
- 
-                # One training step
-                loss = train_pair(w_c, w_o, neg_indices, U, V, lr)
+
+                loss = train_batch(
+                    centers[b_start:b_end],
+                    contexts[b_start:b_end],
+                    all_negs[b_start:b_end],
+                    U, V, lr
+                )
                 running_loss += loss
-                words_processed += 1
- 
-            # Logging
-            if (t + 1) % log_every == 0:
-                avg_loss = running_loss / log_every
-                elapsed = time.time() - epoch_start
-                wps = (t + 1) / elapsed
-                print(f"  [{t+1:>10}/{len(corpus)}] "
-                      f"loss: {avg_loss:.4f}  "
-                      f"lr: {lr:.6f}  "
-                      f"words/sec: {wps:.0f}")
-                running_loss = 0.0
- 
+                running_pairs += (b_end - b_start)
+
+            words_processed += (chunk_end - chunk_start)
+
+            elapsed = time.time() - epoch_start
+            wps = words_processed / elapsed if elapsed > 0 else 0
+            avg_loss = running_loss / running_pairs if running_pairs > 0 else 0
+            print(f"  [{chunk_end:>10}/{len(corpus)}] "
+                  f"loss: {avg_loss:.4f}  "
+                  f"lr: {lr:.6f}  "
+                  f"words/sec: {wps:.0f}")
+            running_loss = 0.0
+            running_pairs = 0
+
         epoch_time = time.time() - epoch_start
         print(f"  Epoch {epoch + 1} completed in {epoch_time:.1f}s")
- 
+
     return U, V
 
 
@@ -213,8 +264,6 @@ def most_similar(word, U, word_to_idx, idx_to_word, top_n=10):
     word_vec = U[idx]
  
     # Cosine similarity against all words:
-    # cos(a, b) = (a^T b) / (||a|| ||b||)
-    # Compute all dot products at once: U @ word_vec gives (vocab_size,) vector
     dots = U @ word_vec                        # a^T b for all words
     norms = np.linalg.norm(U, axis=1)          # ||a|| for all words
     word_norm = np.linalg.norm(word_vec)        # ||b||
@@ -251,3 +300,67 @@ def analogy(a, b, c, U, word_to_idx, idx_to_word, top_n=5):
     for i in results:
         print(f"  {idx_to_word[i]:15s} {similarities[i]:.4f}")
 
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Word2Vec Skip-Gram with Negative Sampling (Pure NumPy)")
+    parser.add_argument("--embedding_dim", type=int, default=100)
+    parser.add_argument("--window", type=int, default=5)
+    parser.add_argument("--num_neg", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--initial_lr", type=float, default=0.025)
+    parser.add_argument("--min_lr", type=float, default=0.0001)
+    parser.add_argument("--min_count", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=512)
+    parser.add_argument("--chunk_size", type=int, default=100000)
+    parser.add_argument("--subsample_t", type=float, default=1e-5)
+    args = parser.parse_args()
+
+    print("Hyperparameters:")
+    for k, v in vars(args).items():
+        print(f"  {k}: {v}")
+
+    # Stage 1: Load and preprocess
+    print("\nLoading text8 dataset...")
+    words = load_text8()
+    print(f"Raw corpus: {len(words)} words")
+ 
+    word_to_idx, idx_to_word, word_counts = build_vocab(words, min_count=args.min_count)
+    vocab_size = len(word_to_idx)
+    print(f"Vocabulary size: {vocab_size}")
+ 
+    corpus = build_corpus(words, word_to_idx)
+    print(f"Corpus length after filtering: {len(corpus)}")
+ 
+    # Stage 2: Subsample frequent words
+    corpus = subsample_corpus(corpus, word_counts, word_to_idx, vocab_size, t=args.subsample_t)
+    print(f"Corpus length after subsampling: {len(corpus)}")
+ 
+    # Stage 3: Build noise distribution 
+    noise_dist = build_noise_distribution(word_counts, word_to_idx, vocab_size)
+ 
+    # Stages 4-7: Train
+    print("\nStarting training...")
+    U, V = train(
+        corpus=corpus,
+        vocab_size=vocab_size,
+        noise_dist=noise_dist,
+        embedding_dim=args.embedding_dim,
+        window=args.window,
+        num_neg=args.num_neg,
+        initial_lr=args.initial_lr,
+        min_lr=args.min_lr,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        chunk_size=args.chunk_size,
+    )
+
+    # Stage 8: Evaluation
+    print("EVALUATION:")
+ 
+    test_words = ["king", "queen", "computer", "france", "dog"]
+    for word in test_words:
+        most_similar(word, U, word_to_idx, idx_to_word)
+ 
+    analogy("man", "king", "woman", U, word_to_idx, idx_to_word)
+    analogy("france", "paris", "germany", U, word_to_idx, idx_to_word)
