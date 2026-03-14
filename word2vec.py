@@ -364,3 +364,7 @@ if __name__ == "__main__":
  
     analogy("man", "king", "woman", U, word_to_idx, idx_to_word)
     analogy("france", "paris", "germany", U, word_to_idx, idx_to_word)
+
+    print("Test it yourself (Type 'end' to stop):")
+    while (word := input("\n> ")) not in ("end", ""):
+        most_similar(word, U, word_to_idx, idx_to_word)

@@ -76,12 +76,16 @@ python word2vec.py --embedding_dim 50 --epochs 1
 7. **Training Loop.** Process corpus in chunks, generate pairs, train in batches with linear learning rate decay.
 8. **Evaluation.** Cosine similarity for nearest neighbors, vector arithmetic for analogies.
 
-## Sample Results (1 epoch, default settings)
-
+## Sample Results (5 epochs, default settings, ~55 min on CPU)
 ```
-Most similar to 'king':       emperor, pope, throne
-Most similar to 'computer':   microsoft, windows, software
-Most similar to 'france':     poland, portugal, hungary
+Most similar to 'king':       conqueror, highness, pretender
+Most similar to 'queen':      elizabeth, monarch, princess, consort
+Most similar to 'computer':   computers, hardware, microcomputer, computing
+Most similar to 'france':     belgium, netherlands, vichy
+Most similar to 'dog':        hound, hounds, dogs, cat
+
+'france' is to 'paris' as 'germany' is to ...?
+  munich, berlin, leipzig, dresden
 ```
 
 ## Dataset
